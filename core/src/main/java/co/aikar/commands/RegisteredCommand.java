@@ -34,6 +34,7 @@ import co.aikar.commands.annotation.Syntax;
 import co.aikar.commands.contexts.ContextResolver;
 import org.jetbrains.annotations.Nullable;
 
+import java.lang.annotation.Annotation;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Parameter;
@@ -48,7 +49,7 @@ import java.util.Set;
 import java.util.stream.Collectors;
 
 @SuppressWarnings("WeakerAccess")
-public class RegisteredCommand <CEC extends CommandExecutionContext<CEC, ? extends CommandIssuer>> {
+public class RegisteredCommand<CEC extends CommandExecutionContext<CEC, ? extends CommandIssuer>> {
     final BaseCommand scope;
     final Method method;
     final CommandParameter<CEC>[] parameters;
@@ -96,7 +97,7 @@ public class RegisteredCommand <CEC extends CommandExecutionContext<CEC, ? exten
         //noinspection unchecked
         this.parameters = new CommandParameter[parameters.length];
 
-        this.isPrivate = annotations.hasAnnotation(method, Private.class);
+        this.isPrivate = annotations.hasAnnotation(method, Private.class) || annotations.getAnnotationFromClass(scope.getClass(), Private.class) != null;
 
         int requiredResolvers = 0;
         int consumeInputResolvers = 0;
@@ -105,7 +106,7 @@ public class RegisteredCommand <CEC extends CommandExecutionContext<CEC, ? exten
         StringBuilder syntaxBuilder = new StringBuilder(64);
 
         for (int i = 0; i < parameters.length; i++) {
-            CommandParameter<CEC> parameter = this.parameters[i] = new CommandParameter<>(this, parameters[i], i);
+            CommandParameter<CEC> parameter = this.parameters[i] = new CommandParameter<>(this, parameters[i], i, i == parameters.length - 1);
             if (!parameter.isCommandIssuer()) {
                 if (!parameter.requiresInput()) {
                     optionalResolvers++;
@@ -152,8 +153,12 @@ public class RegisteredCommand <CEC extends CommandExecutionContext<CEC, ? exten
         }
         postCommand();
     }
-    public void preCommand() {}
-    public void postCommand() {}
+
+    public void preCommand() {
+    }
+
+    public void postCommand() {
+    }
 
     void handleException(CommandIssuer sender, List<String> args, Exception e) {
         if (e instanceof InvocationTargetException && e.getCause() instanceof InvalidCommandArgument) {
@@ -208,7 +213,7 @@ public class RegisteredCommand <CEC extends CommandExecutionContext<CEC, ? exten
             boolean isLast = i == parameters.length - 1;
             boolean allowOptional = remainingRequired == 0;
             final CommandParameter<CEC> parameter = parameters[i];
-            if (parameter.isCommandIssuer()) {
+            if (!parameter.canConsumeInput()) {
                 argLimit++;
             }
             final String parameterName = parameter.getName();
@@ -221,24 +226,36 @@ public class RegisteredCommand <CEC extends CommandExecutionContext<CEC, ? exten
             if (requiresInput && remainingRequired > 0) {
                 remainingRequired--;
             }
+
+            Set<String> parameterPermissions = parameter.getRequiredPermissions();
             if (args.isEmpty() && !(isLast && type == String[].class)) {
                 if (allowOptional && parameter.getDefaultValue() != null) {
                     args.add(parameter.getDefaultValue());
                 } else if (allowOptional && parameter.isOptional()) {
+                    if (!this.manager.hasPermission(sender, parameterPermissions)) {
+                        sender.sendMessage(MessageType.ERROR, MessageKeys.PERMISSION_DENIED_PARAMETER, "{param}", parameterName);
+                        throw new InvalidCommandArgument(false);
+                    }
                     Object value = parameter.isOptionalResolver() ? resolver.getContext(context) : null;
+
                     if (value == null && parameter.getClass().isPrimitive()) {
                         throw new IllegalStateException("Parameter " + parameter.getName() + " is primitive and does not support Optional.");
                     }
                     //noinspection unchecked
                     this.manager.conditions.validateConditions(context, value);
                     passedArgs.put(parameterName, value);
-                    //noinspection UnnecessaryContinue
                     continue;
                 } else if (requiresInput) {
                     scope.showSyntax(sender, this);
                     return null;
                 }
+            } else {
+                if (!this.manager.hasPermission(sender, parameterPermissions)) {
+                    sender.sendMessage(MessageType.ERROR, MessageKeys.PERMISSION_DENIED_PARAMETER, "{param}", parameterName);
+                    throw new InvalidCommandArgument(false);
+                }
             }
+
             if (parameter.getValues() != null) {
                 String arg = !args.isEmpty() ? args.get(0) : "";
 
@@ -253,13 +270,14 @@ public class RegisteredCommand <CEC extends CommandExecutionContext<CEC, ? exten
                         possible.add(s.toLowerCase());
                     }
                 }
-
                 if (!possible.contains(arg.toLowerCase())) {
                     throw new InvalidCommandArgument(MessageKeys.PLEASE_SPECIFY_ONE_OF,
                             "{valid}", ACFUtil.join(possible, ", "));
                 }
             }
+
             Object paramValue = resolver.getContext(context);
+
             //noinspection unchecked
             this.manager.conditions.validateConditions(context, paramValue);
             passedArgs.put(parameterName, paramValue);
@@ -268,9 +286,8 @@ public class RegisteredCommand <CEC extends CommandExecutionContext<CEC, ? exten
     }
 
     boolean hasPermission(CommandIssuer issuer) {
-        return (permission == null || permission.isEmpty() || scope.manager.hasPermission(issuer, permission)) && scope.hasPermission(issuer);
+        return this.manager.hasPermission(issuer, getRequiredPermissions());
     }
-
 
     /**
      * @see #getRequiredPermissions()
@@ -326,5 +343,9 @@ public class RegisteredCommand <CEC extends CommandExecutionContext<CEC, ? exten
 
     public void addSubcommands(Collection<String> cmd) {
         this.registeredSubcommands.addAll(cmd);
+    }
+
+    public <T extends Annotation> T getAnnotation(Class<T> annotation) {
+        return method.getAnnotation(annotation);
     }
 }

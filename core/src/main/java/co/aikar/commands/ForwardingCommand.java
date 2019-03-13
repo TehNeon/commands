@@ -40,6 +40,7 @@ public class ForwardingCommand extends BaseCommand {
         this.command = baseCommand;
         this.baseArgs = baseArgs;
         this.manager = baseCommand.manager;
+        this.subCommands.put(DEFAULT, regCommand);
     }
 
     @Override
@@ -73,13 +74,14 @@ public class ForwardingCommand extends BaseCommand {
     }
 
     @Override
-    public List<String> tabComplete(CommandIssuer issuer, String alias, String[] args, boolean isAsync) throws IllegalArgumentException {
-        return command.tabComplete(issuer, alias, ApacheCommonsLangUtil.addAll(baseArgs, args), isAsync);
+    public List<String> tabComplete(CommandIssuer issuer, RootCommand rootCommand, String[] args, boolean isAsync) throws IllegalArgumentException {
+        return command.tabComplete(issuer, rootCommand, args, isAsync);
     }
 
     @Override
-    public void execute(CommandIssuer issuer, String commandLabel, String[] args) {
-        command.execute(issuer, commandLabel, ApacheCommonsLangUtil.addAll(baseArgs, args));
+    public void execute(CommandIssuer issuer, CommandRouter.CommandRouteResult result) {
+        result = new CommandRouter.CommandRouteResult(regCommand, result.args, ACFUtil.join(baseArgs), result.commandLabel);
+        command.execute(issuer, result);
     }
 
     BaseCommand getCommand() {

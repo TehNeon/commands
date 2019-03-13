@@ -23,7 +23,8 @@
 
 package co.aikar.commands;
 
-import co.aikar.commands.apachecommonslang.ApacheCommonsLangUtil;
+import co.aikar.commands.CommandRouter.CommandRouteResult;
+import co.aikar.commands.CommandRouter.RouteSearch;
 import com.google.common.collect.SetMultimap;
 
 import java.util.ArrayList;
@@ -44,21 +45,7 @@ public interface RootCommand {
 
     default void addChildShared(List<BaseCommand> children, SetMultimap<String, RegisteredCommand> subCommands, BaseCommand command) {
         command.subCommands.entries().forEach(e -> {
-            String key = e.getKey();
-            RegisteredCommand registeredCommand = e.getValue();
-            if (key.equals(BaseCommand.DEFAULT) || key.equals(BaseCommand.CATCHUNKNOWN)) {
-                return;
-            }
-            Set<RegisteredCommand> registered = subCommands.get(key);
-            if (!registered.isEmpty()) {
-                BaseCommand prevBase = registered.iterator().next().scope;
-                if (prevBase != registeredCommand.scope) {
-                    this.getManager().log(LogLevel.ERROR, "ACF Error: " + command.getName() + " registered subcommand " + key + " for root command " + getCommandName() + " - but it is already defined in " + prevBase.getName());
-                    this.getManager().log(LogLevel.ERROR, "2 subcommands of the same prefix may not be spread over 2 different classes. Ignoring this.");
-                    return;
-                }
-            }
-            subCommands.put(key, registeredCommand);
+            subCommands.put(e.getKey(), e.getValue());
         });
 
         children.add(command);
@@ -102,23 +89,25 @@ public interface RootCommand {
     }
 
     default BaseCommand execute(CommandIssuer sender, String commandLabel, String[] args) {
-        BaseCommand command = getBaseCommand(args);
+        CommandRouter router = getManager().getRouter();
+        RouteSearch search = router.routeCommand(this, commandLabel, args, false);
+        BaseCommand defCommand = getDefCommand();
+        if (search != null) {
+            CommandRouteResult result = router.matchCommand(search, false);
+            if (result != null) {
+                BaseCommand scope = result.cmd.scope;
+                scope.execute(sender, result);
+                return scope;
+            }
 
-        command.execute(sender, commandLabel, args);
-        return command;
-    }
-
-    default BaseCommand getBaseCommand(String[] args) {
-        BaseCommand command = getDefCommand();
-        for (int i = args.length; i >= 0; i--) {
-            String checkSub = ApacheCommonsLangUtil.join(args, " ", 0, i).toLowerCase();
-            Set<RegisteredCommand> registeredCommands = getSubCommands().get(checkSub);
-            if (!registeredCommands.isEmpty()) {
-                command = registeredCommands.iterator().next().scope;
-                break;
+            RegisteredCommand firstElement = ACFUtil.getFirstElement(search.commands);
+            if (firstElement != null) {
+                defCommand = firstElement.scope;
             }
         }
-        return command;
+
+        defCommand.help(sender, args);
+        return defCommand;
     }
 
     default List<String> getTabCompletions(CommandIssuer sender, String alias, String[] args) {
@@ -133,7 +122,7 @@ public interface RootCommand {
         Set<String> completions = new HashSet<>();
         getChildren().forEach(child -> {
             if (!commandsOnly) {
-                completions.addAll(child.tabComplete(sender, alias, args, isAsync));
+                completions.addAll(child.tabComplete(sender, this, args, isAsync));
             }
             completions.addAll(child.getCommandsForCompletion(sender, args));
         });
